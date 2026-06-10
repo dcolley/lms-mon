@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "lms-mon"
+version = "0.1.0"
+description = "htop-style TUI monitor for LM Studio"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "textual>=0.70.0",
+    "httpx>=0.27.0",
+    "psutil>=5.9.0",
+]
+
+[project.scripts]
+lms-mon = "lms_mon:main"
+
+[project.urls]
+Homepage = "https://github.com/dcolley/lms-mon"
+Issues   = "https://github.com/dcolley/lms-mon/issues"
+
+[tool.setuptools]
+py-modules = ["lms_mon"]
