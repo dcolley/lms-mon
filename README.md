@@ -1,28 +1,11 @@
 # lms-mon
 
-> **htop-style TUI monitor for [LM Studio](https://lmstudio.ai)**
+> **TUI monitor for [LM Studio](https://lmstudio.ai)**
 
 Real-time visibility into loaded models, inference traces, GPU/CPU/RAM usage,
 and rolling sparkline graphs — all in a single terminal window.
 
-```
-┌─ ◈ Loaded Models ───────────────────────────┐  ┌─ ◈ System Resources ───────────────────┐
-│ Model            State   Ctx   GPU%  VRAM  │  │ CPU  ████████░░░░  72.3%              │
-│ llama-3.2-3b-it  loaded  8192  100%  3.8GB │  │ RAM  ██████░░░░░░  58.1%  11GB/16GB   │
-│ mistral-7b-v0.3  loaded  4096   80%  6.9GB │  │ GPU  ████████████ 100.0%  74°C  280W  │
-│                                            │  │ VRAM █████████░░░  87.2%  14GB/16GB   │
-│                                            │  │                                       │
-│                                            │  │ ⚡ Inference Metrics                  │
-│                                            │  │   Tok/s  last   142.3                 │
-└────────────────────────────────────────────┘  │   TTFT          312 ms                │
-                                                └───────────────────────────────────────┘
-┌─ ◈ lms log stream  (c = clear) ─────────────┐  ┌─ ◈ Metrics History (last 60 s) ───────┐
-│ 14:02:01 → llama-3.2  Hello, how ..       │  │ CPU%   ▂▄▆█▇▅▃▂▄▆▇█▅▄▃▂▁▂▄▆       │
-│ 14:02:02 ← llama-3.2  142tok/s TTFT:312ms│  │ RAM%   ▅▅▅▅▅▆▆▆▆▆▆▇▇▇▇▇▇▇▇▇       │
-│ 14:02:05 → mistral-7b  Explain GPR ..    │  │ GPU%   ▁▁▁▁▁▁▁▁████████████       │
-└────────────────────────────────────────────┘  │ Tok/s  ▁▁▁▁▁▁██████████████       │
-  Tab/S-Tab: panes  ↑↓: model  r: refresh  q: quit  └───────────────────────────────────────┘
-```
+![lms-mon](./images/lms-mon.jpg)
 
 ---
 
@@ -40,14 +23,16 @@ and rolling sparkline graphs — all in a single terminal window.
 
 ## Requirements
 
-| Dependency | Version | Purpose |
-|---|---|---|
-| Python | ≥ 3.10 | Runtime |
-| [textual](https://github.com/Textualize/textual) | ≥ 0.70 | TUI framework |
-| [httpx](https://www.python-httpx.org/) | ≥ 0.27 | Async HTTP to LM Studio REST API |
-| [psutil](https://github.com/giampaolo/psutil) | ≥ 5.9 | CPU / RAM metrics |
-| LM Studio | ≥ 0.3.26 | `lms` CLI + REST API |
-| nvidia-smi | optional | GPU metrics (NVIDIA only) |
+
+| Dependency                                       | Version  | Purpose                          |
+| ------------------------------------------------ | -------- | -------------------------------- |
+| Python                                           | ≥ 3.10   | Runtime                          |
+| [textual](https://github.com/Textualize/textual) | ≥ 0.70   | TUI framework                    |
+| [httpx](https://www.python-httpx.org/)           | ≥ 0.27   | Async HTTP to LM Studio REST API |
+| [psutil](https://github.com/giampaolo/psutil)    | ≥ 5.9    | CPU / RAM metrics                |
+| LM Studio                                        | ≥ 0.3.26 | `lms` CLI + REST API             |
+| nvidia-smi                                       | optional | GPU metrics (NVIDIA only)        |
+
 
 ---
 
@@ -116,6 +101,7 @@ lms server status
 ```
 
 `lms-mon` uses:
+
 - `GET http://localhost:1234/api/v0/models` — models pane
 - `lms log stream --source model --filter input,output --json --stats` — log pane
 
@@ -131,25 +117,29 @@ lms-mon --port 8080                # custom port
 
 ### Keyboard shortcuts
 
-| Key | Action |
-|---|---|
-| `Tab` | Focus next pane |
-| `Shift+Tab` | Focus previous pane |
-| `↑` / `↓` | Move model cursor (log pane highlights selected model) |
-| `r` | Force-refresh model list |
-| `c` | Clear log pane |
-| `q` | Quit |
+
+| Key         | Action                                                 |
+| ----------- | ------------------------------------------------------ |
+| `Tab`       | Focus next pane                                        |
+| `Shift+Tab` | Focus previous pane                                    |
+| `↑` / `↓`   | Move model cursor (log pane highlights selected model) |
+| `r`         | Force-refresh model list                               |
+| `c`         | Clear log pane                                         |
+| `q`         | Quit                                                   |
+
 
 ---
 
 ## GPU support
 
-| Backend | Status | Notes |
-|---|---|---|
-| **NVIDIA** | ✅ automatic | Requires `nvidia-smi` on `PATH` |
-| **AMD ROCm** | ⚙ patch needed | Swap `nvidia-smi` call for `rocm-smi --showuse --csv` in `_try_nvidia_smi()` |
-| **Apple Silicon** | ⚙ patch needed | Use `powermetrics` (requires `sudo`) |
-| **None / CPU-only** | ✅ graceful | GPU row hidden; everything else works normally |
+
+| Backend             | Status         | Notes                                                                        |
+| ------------------- | -------------- | ---------------------------------------------------------------------------- |
+| **NVIDIA**          | ✅ automatic    | Requires `nvidia-smi` on `PATH`                                              |
+| **AMD ROCm**        | ⚙ patch needed | Swap `nvidia-smi` call for `rocm-smi --showuse --csv` in `_try_nvidia_smi()` |
+| **Apple Silicon**   | ⚙ patch needed | Use `powermetrics` (requires `sudo`)                                         |
+| **None / CPU-only** | ✅ graceful     | GPU row hidden; everything else works normally                               |
+
 
 ---
 
