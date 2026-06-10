@@ -17,6 +17,7 @@ and rolling sparkline graphs — all in a single terminal window.
 - Live inference stats: tok/s (last / avg / peak), TTFT, request count
 - GPU metrics via `nvidia-smi` (NVIDIA); gracefully skipped if absent
 - `lms log stream --json --stats` parsed in real time — exact prompt/response traces
+- **Command palette** (`Ctrl+P`) — Textual’s fuzzy-search launcher for every shortcut
 - Shows helpful error if `lms` is not on `PATH`
 
 ---
@@ -115,16 +116,52 @@ lms-mon --host 192.168.1.100       # remote LM Studio instance
 lms-mon --port 8080                # custom port
 ```
 
+### Command palette (`Ctrl+P`)
+
+`Ctrl+P` is a **[Textual](https://textual.textualize.io/guide/command_palette/)** feature, not something
+`lms-mon` implements itself. Textual enables it by default (`ENABLE_COMMAND_PALETTE`); `lms-mon`
+inherits it automatically.
+
+Press `Ctrl+P` to open a fuzzy-search command palette. Type to filter, `Enter` to run a command,
+`Esc` to close. It lists **every registered key binding**, including shortcuts that are hidden
+from the footer — useful for discovering actions you might not remember:
+
+| Palette label   | Key        | Action                                      |
+| --------------- | ---------- | ------------------------------------------- |
+| Select          | `Space`    | Toggle log filter on the model under cursor |
+| Sort            | `s`        | Toggle alphabetical / loaded-first sort     |
+| Load            | `l`        | Open load dialog (`lms load` + extra flags) |
+| Unload          | `u`        | Unload model under cursor                   |
+| Log: model      | `1`        | Stream model prediction logs                |
+| Log: server     | `2`        | Stream LM Studio server logs                |
+| Log: runtime    | `3`        | Stream runtime logs                         |
+| Log: input      | `i`        | Toggle input events (model source)          |
+| Log: output     | `o`        | Toggle output events (model source)         |
+| Log: stats      | `S`        | Toggle per-token stats in log stream        |
+| Theme           | —          | Change Textual colour theme                 |
+| Quit            | —          | Exit the app                                |
+
+The palette also exposes Textual system commands (e.g. **Theme**, **Quit**). To disable it in a
+fork, set `ENABLE_COMMAND_PALETTE = False` on the `App` subclass.
+
 ### Keyboard shortcuts
 
 
 | Key         | Action                                                 |
 | ----------- | ------------------------------------------------------ |
+| `Ctrl+P`    | Open command palette (Textual; see above)              |
 | `Tab`       | Focus next pane                                        |
 | `Shift+Tab` | Focus previous pane                                    |
 | `↑` / `↓`   | Move model cursor (log pane highlights selected model) |
+| `Space`     | Toggle log filter on model under cursor                |
+| `s`         | Toggle model list sort (alpha / loaded-first)          |
+| `l`         | Load model (opens flag dialog)                         |
+| `u`         | Unload model under cursor                              |
 | `r`         | Force-refresh model list                               |
 | `c`         | Clear log pane                                         |
+| `1` / `2` / `3` | Switch log source (model / server / runtime)       |
+| `i` / `o`   | Toggle log input / output filters (model source)       |
+| `S`         | Toggle inference stats in log stream                   |
 | `q`         | Quit                                                   |
 
 

@@ -13,7 +13,8 @@ import shlex
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, Optional
+from fractions import Fraction
+from typing import Callable, Literal, Optional, Sequence
 
 try:
     import psutil
@@ -35,17 +36,33 @@ from textual.widgets import (
     Header, Footer, DataTable, Static, RichLog, Sparkline, Label, Input,
 )
 from textual.reactive import reactive
+from textual.widget import Widget
 from textual import work
+from textual.renderables._blend_colors import blend_colors
+from rich.color import Color
+from rich.console import Console, ConsoleOptions, RenderResult
 from rich.markup import escape as rich_escape
+from rich.measure import Measurement
+from rich.segment import Segment
+from rich.style import Style
 from rich.text import Text
 from rich.table import Table
 
 
 # ─── constants ─────────────────────────────────────────────
-HISTORY_LEN   = 60
-POLL_INTERVAL = 2.0
-GPU_INTERVAL  = 1.5
+METRICS_INTERVAL   = 1.0
+HISTORY_WINDOW_SEC = 240          # 4 min of samples at METRICS_INTERVAL
+HISTORY_LEN        = int(HISTORY_WINDOW_SEC / METRICS_INTERVAL)
+SPARKLINE_STRIDE   = 4            # 1 bar char + 3 gaps ≈ 25% visual width
+POLL_INTERVAL      = 2.0
+GPU_INTERVAL       = 1.5
 LOG_SOURCES   = ("model", "server", "runtime")
+
+
+def _history_title() -> str:
+    if HISTORY_WINDOW_SEC >= 120 and HISTORY_WINDOW_SEC % 60 == 0:
+        return f"◈ Metrics History (last {HISTORY_WINDOW_SEC // 60}m)"
+    return f"◈ Metrics History (last {HISTORY_WINDOW_SEC}s)"
 
 
 @dataclass
@@ -195,6 +212,144 @@ def _log_event_matches_selection(selected: Optional[str], obj: dict) -> bool:
     return any(_model_matches(selected, m) for m in models)
 
 
+def _traffic_color(ratio: float) -> Color:
+    """Green → amber → red for utilization ratio in [0, 1]."""
+    ratio = max(0.0, min(1.0, ratio))
+    green = Color.from_rgb(50, 200, 80)
+    amber = Color.from_rgb(255, 180, 40)
+    red   = Color.from_rgb(220, 50, 50)
+    if ratio <= 0.5:
+        return blend_colors(green, amber, ratio * 2)
+    return blend_colors(amber, red, (ratio - 0.5) * 2)
+
+
+class GradientSparklineRenderable:
+    """Sparkline with absolute 0–max scaling and a green→red row gradient."""
+
+    BARS = "▁▂▃▄▅▆▇█"
+
+    def __init__(
+        self,
+        data: Sequence[float],
+        *,
+        width: int | None,
+        height: int | None = None,
+        max_val: float = 100.0,
+        stride: int = 1,
+        summary_function: Callable[[Sequence[float]], float] = max,
+    ) -> None:
+        self.data = data
+        self.width = width
+        self.height = height
+        self.max_val = max(max_val, 1.0)
+        self.stride = max(1, stride)
+        self.summary_function = summary_function
+
+    @classmethod
+    def _buckets(cls, data: list[float], num_buckets: int):
+        bucket_step = Fraction(len(data), num_buckets)
+        for bucket_no in range(num_buckets):
+            start = int(bucket_step * bucket_no)
+            end = int(bucket_step * (bucket_no + 1))
+            partition = data[start:end]
+            if partition:
+                yield partition
+
+    def __rich_console__(
+        self, console: Console, options: ConsoleOptions,
+    ) -> RenderResult:
+        width = self.width or options.max_width
+        height = self.height or 1
+        len_data = len(self.data)
+
+        if len_data == 0:
+            for _ in range(height - 1):
+                yield Segment.line()
+            yield Segment("▁" * width, Style.from_color(_traffic_color(0.0)))
+            return
+
+        bar_line_segments = len(self.BARS)
+        bar_segments = bar_line_segments * height - 1
+        stride = self.stride
+        num_buckets = max(1, width // stride)
+        buckets = tuple(self._buckets(list(self.data), num_buckets=num_buckets))
+
+        for i in reversed(range(height)):
+            row_ratio = (i + 1) / height
+            row_color = Style.from_color(_traffic_color(row_ratio))
+            current_bar_part_low = i * bar_line_segments
+            current_bar_part_high = (i + 1) * bar_line_segments
+
+            cols = 0
+            for partition in buckets:
+                if cols >= width:
+                    break
+                util = min(self.summary_function(partition) / self.max_val, 1.0)
+                bar_index = int(util * bar_segments)
+
+                if bar_index < current_bar_part_low:
+                    bar, with_color = " ", False
+                elif bar_index >= current_bar_part_high:
+                    bar, with_color = "█", True
+                else:
+                    bar = self.BARS[bar_index % bar_line_segments]
+                    with_color = True
+
+                yield Segment(bar, row_color if with_color else None)
+                cols += 1
+                for _ in range(stride - 1):
+                    if cols >= width:
+                        break
+                    yield Segment(" ")
+                    cols += 1
+
+            while cols < width:
+                yield Segment(" ")
+                cols += 1
+
+            if i > 0:
+                yield Segment.line()
+
+    def __rich_measure__(
+        self, console: Console, options: ConsoleOptions,
+    ) -> Measurement:
+        return Measurement(self.width or options.max_width, self.height or 1)
+
+
+class GradientSparkline(Widget):
+    """Utilization sparkline: absolute % scale with green→red gradient."""
+
+    DEFAULT_CSS = "GradientSparkline { height: 1; }"
+
+    data = reactive[Optional[Sequence[float]]](None)
+    max_val = reactive(100.0)
+
+    def __init__(
+        self,
+        data: Sequence[float] | None = None,
+        *,
+        max_val: float = 100.0,
+        stride: int = 1,
+        summary_function: Callable[[Sequence[float]], float] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.data = data
+        self.max_val = max_val
+        self.stride = stride
+        self.summary_function = summary_function or max
+
+    def render(self) -> RenderResult:
+        return GradientSparklineRenderable(
+            self.data or [],
+            width=self.size.width,
+            height=self.size.height,
+            max_val=self.max_val,
+            stride=self.stride,
+            summary_function=self.summary_function,
+        )
+
+
 def _bar(value: float, max_value: float, width: int = 12, fg: str = "green") -> Text:
     filled = int(round(value / max(max_value, 1) * width))
     bar = "█" * filled + "░" * (width - filled)
@@ -311,24 +466,45 @@ class MetricSparkline(Vertical):
         text-style: bold;
         height: 1;
     }
-    MetricSparkline Sparkline {
+    MetricSparkline Sparkline, MetricSparkline GradientSparkline {
         height: 4;
     }
     """
 
-    def __init__(self, label: str, max_val: float = 100.0, **kwargs):
+    def __init__(
+        self,
+        label: str,
+        max_val: float = 100.0,
+        *,
+        gradient: bool = False,
+        stride: int = 1,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
-        self._label   = label
-        self._max_val = max_val
+        self._label     = label
+        self._max_val   = max_val
+        self._gradient  = gradient
+        self._stride    = stride
         self._data: deque = deque([0.0] * HISTORY_LEN, maxlen=HISTORY_LEN)
 
     def compose(self) -> ComposeResult:
         yield Label(self._label)
-        yield Sparkline(list(self._data), summary_function=max)
+        if self._gradient:
+            yield GradientSparkline(
+                list(self._data),
+                max_val=self._max_val,
+                stride=self._stride,
+                summary_function=max,
+            )
+        else:
+            yield Sparkline(list(self._data), summary_function=max)
 
     def push(self, value: float) -> None:
         self._data.append(value)
-        self.query_one(Sparkline).data = list(self._data)
+        chart = (
+            GradientSparkline if self._gradient else Sparkline
+        )
+        self.query_one(chart).data = list(self._data)
 
 
 class SysPanel(Static):
@@ -423,15 +599,15 @@ class LMSMon(App):
     #main {
         layout: grid;
         grid-size: 2 2;
-        grid-columns: 1fr 1fr;
+        grid-columns: 3fr 1fr;
         grid-rows: 2fr 3fr;
-        grid-gutter: 1 2;
+        grid-gutter: 0;
         height: 1fr;
-        padding: 0 1;
+        padding: 0;
     }
-    .pane { border: round $panel; padding: 0 1; height: 100%; }
+    .pane { border: round $panel; padding: 0; height: 100%; }
     .pane.active-pane { border: round $accent; }
-    .pane-title { text-style: bold; color: $accent; height: 1; padding: 0 1; }
+    .pane-title { text-style: bold; color: $accent; height: 1; padding: 0; }
     #pane-charts { overflow-y: auto; }
     DataTable { height: 1fr; }
     RichLog { height: 1fr; }
@@ -467,6 +643,10 @@ class LMSMon(App):
         self._lms_proc     = None
         self._log_opts     = log_opts or LogStreamOptions()
         self._log_shutdown = False
+        self._metric_cpu   = 0.0
+        self._metric_ram   = 0.0
+        self._metric_gpu   = 0.0
+        self._tps_tick_max = 0.0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -486,10 +666,16 @@ class LMSMon(App):
                 yield Static("", id="log-pane-title", classes="pane-title")
                 yield RichLog(id="log-view", max_lines=600, markup=True)
             with ScrollableContainer(id="pane-charts", classes="pane"):
-                yield Static("◈ Metrics History (last 60s)", classes="pane-title")
-                yield MetricSparkline("CPU %",      id="spark-cpu")
-                yield MetricSparkline("RAM %",      id="spark-ram")
-                yield MetricSparkline("GPU Util %", id="spark-gpu")
+                yield Static(_history_title(), classes="pane-title")
+                yield MetricSparkline(
+                    "CPU %", id="spark-cpu", gradient=True, stride=SPARKLINE_STRIDE,
+                )
+                yield MetricSparkline(
+                    "RAM %", id="spark-ram", gradient=True, stride=SPARKLINE_STRIDE,
+                )
+                yield MetricSparkline(
+                    "GPU Util %", id="spark-gpu", gradient=True, stride=SPARKLINE_STRIDE,
+                )
                 yield MetricSparkline("Tok/s", max_val=300.0, id="spark-tps")
         yield Footer()
 
@@ -500,6 +686,7 @@ class LMSMon(App):
         self.set_interval(POLL_INTERVAL, self._poll_models)
         self.set_interval(POLL_INTERVAL, self._do_sys_poll)
         self.set_interval(GPU_INTERVAL,  self._do_gpu_poll)
+        self.set_interval(METRICS_INTERVAL, self._tick_sparklines)
         self._start_log_stream()
 
     def _highlight_pane(self, idx: int) -> None:
@@ -812,6 +999,15 @@ class LMSMon(App):
             tbl.clear()
             tbl.add_row(f"[red]{e}[/]", "–", "–", "–", "–", "–", "–")
 
+    def _tick_sparklines(self) -> None:
+        """Append one synchronized sample to every metrics sparkline."""
+        tps = self._tps_tick_max
+        self._tps_tick_max = 0.0
+        self.query_one("#spark-cpu", MetricSparkline).push(self._metric_cpu)
+        self.query_one("#spark-ram", MetricSparkline).push(self._metric_ram)
+        self.query_one("#spark-gpu", MetricSparkline).push(self._metric_gpu)
+        self.query_one("#spark-tps", MetricSparkline).push(tps)
+
     @work(exclusive=False, thread=True)
     def _do_sys_poll(self) -> None:
         cpu = psutil.cpu_percent(interval=0.5)
@@ -821,8 +1017,8 @@ class LMSMon(App):
     def _apply_sys(self, cpu, ram_pct, used, total) -> None:
         p = self.query_one("#sys-panel", SysPanel)
         p.cpu_pct = cpu; p.ram_pct = ram_pct; p.ram_used = used; p.ram_total = total
-        self.query_one("#spark-cpu", MetricSparkline).push(cpu)
-        self.query_one("#spark-ram", MetricSparkline).push(ram_pct)
+        self._metric_cpu = cpu
+        self._metric_ram = ram_pct
 
     @work(exclusive=False, thread=True)
     def _do_gpu_poll(self) -> None:
@@ -838,7 +1034,7 @@ class LMSMon(App):
             p.gpu_mem_total = gpu["mem_total"]
             p.gpu_temp      = gpu["temp"]
             p.gpu_pwr       = gpu["power"]
-            self.query_one("#spark-gpu", MetricSparkline).push(gpu["util"])
+            self._metric_gpu = gpu["util"]
 
     async def _reap_subprocess(self, proc: asyncio.subprocess.Process) -> None:
         """Terminate the lms log child and wait for it to exit."""
@@ -973,7 +1169,7 @@ class LMSMon(App):
             )
             if tps > 0:
                 infer.record(tps, ttft)
-                self.query_one("#spark-tps", MetricSparkline).push(tps)
+                self._tps_tick_max = max(self._tps_tick_max, tps)
         else:
             log.write(
                 f"[dim]{ts}[/] [dim]{rich_escape(kind)}[/] "
